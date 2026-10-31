@@ -1,0 +1,41 @@
+---
+# Config principale — modifiable sans toucher aux rôles.
+
+vm_name: blackarch-ctf
+
+# Ressources (ajuste selon la machine). Marche pareil sur un portable ou un PC.
+vm_vcpus: 4
+vm_memory_mb: 8192
+vm_disk_gb: 40
+
+# Réseau "user" QEMU (slirp) : NAT 100% userspace, aucun bridge ni capacité
+# root nécessaire (contrairement à un réseau libvirt classique). Le port SSH
+# de la VM est forwardé sur 127.0.0.1:<ssh_forward_port> côté hôte.
+ssh_forward_port: 2222
+
+# Pool de stockage libvirt dédié (pour ne pas polluer le pool "default").
+libvirt_pool_name: blackarch-ctf-pool
+libvirt_pool_path: /var/lib/libvirt/images/blackarch-ctf
+
+# Image cloud Arch Linux officielle (cloud-init préinstallé).
+arch_cloud_image_url: "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"
+arch_cloud_image_checksum_url: "{{ arch_cloud_image_url }}.SHA256"
+
+# Clé SSH dédiée au projet (générée automatiquement par scripts/blackarch-ctf, pas ta clé perso).
+ssh_private_key_path: "{{ playbook_dir }}/../.ssh/blackarch_ctf_ed25519"
+ssh_public_key_path: "{{ ssh_private_key_path }}.pub"
+
+# Utilisateur de bureau dans la VM (root reste réservé à SSH/Ansible).
+desktop_user: blackarch
+desktop_user_password_hash: "!"  # compte sans mot de passe utilisable (login auto + sudo NOPASSWD)
+
+# Mullvad / WireGuard : copie les .conf du hôte (~ /etc/wireguard) dans la VM pour que
+# `vpn <pays>` fonctionne tout de suite. Mets à false si tu préfères configurer à la main.
+sync_wireguard_from_host: true
+host_wireguard_dir: /etc/wireguard
+
+# Accélération 3D SPICE (virgl). Désactivé par défaut : fiable sur les deux machines
+# (NVIDIA propriétaire sur "pc" peut être capricieux avec virgl). Active si ça te tente.
+spice_gl_enabled: false
+
+# Liste des paquets BlackArch/Arch pour le CTF : voir roles/blackarch_base/vars/packages.yml

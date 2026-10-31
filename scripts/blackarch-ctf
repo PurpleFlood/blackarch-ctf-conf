@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Point d'entrée unique du projet. Usage :
+#   blackarch-ctf [up]        créer/démarrer + (re)provisionner + ouvrir l'affichage (défaut)
+#   blackarch-ctf up --fast   démarrer + ouvrir l'affichage SANS relancer Ansible
+#   blackarch-ctf provision   relancer Ansible sans toucher à l'affichage
+#   blackarch-ctf down        arrêt propre (ACPI)
+#   blackarch-ctf destroy     coupe + supprime le disque de la VM (demande confirmation)
+#   blackarch-ctf vpn <pays|off|status|list>   pilote le VPN WireGuard de la VM à distance
+set -euo pipefail
+export LIBVIRT_DEFAULT_URI=qemu:///system
+
+REPO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+cd "$REPO_DIR"
+
+VM_NAME="blackarch-ctf"
+SSH_KEY="$REPO_DIR/.ssh/blackarch_ctf_ed25519"
+SSH_PORT="${BLACKARCH_CTF_SSH_PORT:-2222}" # doit correspondre à ssh_forward_port dans group_vars/all.yml
+SSH_OPTS=(-i "$SSH_KEY" -p "$SSH_PORT" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5)
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "Manque '$1' (lance via 'nix run .#$2' ou 'nix develop')" >&2; exit 1; }; }
+
+ensure_running() {
+  if ! virsh dominfo "$VM_NAME" >/dev/null 2>&1; then
+    return 1 # pas encore créée
+  fi
+  state=$(virsh domstate "$VM_NAME")
+  if [ "$state" = "shut off" ]; then
+    echo "Démarrage de $VM_NAME..."
+    virsh start "$VM_NAME"
+  fi
+  return 0
+}
+
+provision() {
+  need ansible-playbook ansible
+  need xorriso ansible
+  ansible-playbook playbooks/site.yml
+}
+
+view() {
+  need virt-viewer ansible
+  echo "Ouverture de l'affichage (survole la fenêtre pour que les raccourcis clavier passent à la VM)..."
+  virt-viewer --connect qemu:///system --reconnect "$VM_NAME" >/dev/null 2>&1 &
+  disown
+}
+
+cmd_up() {
+  if [ "${1:-}" = "--fast" ] && ensure_running; then
+    echo "$VM_NAME déjà provisionnée, démarrage rapide (sans Ansible)."
+  else
+    provision
+  fi
+  view
+}
+
+cmd_provision() { provision; }
+
+cmd_down() {
+  need virsh ansible
+  virsh shutdown "$VM_NAME"
+}
+
+cmd_destroy() {
+  need virsh ansible
+  read -r -p "Supprimer définitivement la VM $VM_NAME et son disque ? [y/N] " reply
+  case "$reply" in
+    y|Y|yes|oui) ;;
+    *) echo "Annulé."; exit 0 ;;
+  esac
+  virsh destroy "$VM_NAME" 2>/dev/null || true
+  virsh undefine "$VM_NAME" --remove-all-storage
+  echo "VM supprimée (l'image de base Arch en cache et le réseau/pool libvirt sont conservés)."
+}
+
+cmd_vpn() {
+  if ! ensure_running; then
+    echo "VM introuvable (lance d'abord 'blackarch-ctf up')." >&2
+    exit 1
+  fi
+  ssh "${SSH_OPTS[@]}" root@127.0.0.1 vpn "$@"
+}
+
+case "${1:-up}" in
+  up) shift || true; cmd_up "${1:-}" ;;
+  provision) cmd_provision ;;
+  down) cmd_down ;;
+  destroy) cmd_destroy ;;
+  vpn) shift; cmd_vpn "$@" ;;
+  *) echo "Commande inconnue: $1" >&2; exit 1 ;;
+esac

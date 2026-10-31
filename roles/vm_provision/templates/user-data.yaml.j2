@@ -1,0 +1,15 @@
+#cloud-config
+hostname: {{ vm_name }}
+manage_etc_hosts: true
+disable_root: false
+ssh_pwauth: false
+users:
+  - name: root
+    ssh_authorized_keys:
+      - {{ lookup('file', ssh_public_key_path) }}
+chpasswd:
+  expire: false
+growpart:
+  mode: auto
+  devices: ["/"]
+resize_rootfs: true

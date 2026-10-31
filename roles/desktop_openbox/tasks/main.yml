@@ -1,0 +1,80 @@
+---
+# Bureau minimal : Openbox + la conf/thème officiels BlackArch (paquet
+# blackarch-config-openbox, fichiers sous /usr/share/blackarch/config/openbox).
+# Pas de display manager : login auto sur tty1 + `startx`, comme sur l'hôte.
+
+- name: Paquets X11 / Openbox / conf officielle BlackArch
+  command: >
+    pacman -S --noconfirm --needed
+    xorg-server xorg-xinit xorg-xsetroot xorg-xrandr
+    openbox blackarch-config-openbox
+    feh xterm ttf-dejavu
+  register: desktop_pkgs
+  changed_when: "'nothing to do' not in desktop_pkgs.stdout | lower"
+
+- name: Dossier ~/.config/openbox de l'utilisateur de bureau
+  file:
+    path: "/home/{{ desktop_user }}/.config/openbox"
+    state: directory
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+    mode: "0755"
+
+- name: Copier la conf Openbox officielle BlackArch (menu, thème, autostart)
+  # Le paquet fournit un squelette etc/xdg/openbox + usr/share/themes destiné à
+  # être dispatché à la racine du filesystem, pas copié tel quel : on aplatit
+  # les fichiers de conf dans ~/.config/openbox et le thème dans /usr/share/themes.
+  copy:
+    remote_src: true
+    src: "/usr/share/blackarch/config/openbox/etc/xdg/openbox/"
+    dest: "/home/{{ desktop_user }}/.config/openbox/"
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+
+- name: Copier le thème Openbox officiel BlackArch (système, /usr/share/themes)
+  copy:
+    remote_src: true
+    src: "/usr/share/blackarch/config/openbox/usr/share/themes/blackarch"
+    dest: "/usr/share/themes/"
+
+- name: .xinitrc -> lance la session Openbox
+  copy:
+    dest: "/home/{{ desktop_user }}/.xinitrc"
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      exec openbox-session
+
+- name: .bash_profile -> startx automatique sur tty1
+  blockinfile:
+    path: "/home/{{ desktop_user }}/.bash_profile"
+    create: true
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+    mode: "0644"
+    marker: "# {mark} ANSIBLE blackarch-ctf startx"
+    block: |
+      if [ -z "$DISPLAY" ] && [ "$(tty)" = /dev/tty1 ]; then
+        exec startx -- -nolisten tcp
+      fi
+
+- name: Dossier override systemd pour getty@tty1
+  file:
+    path: /etc/systemd/system/getty@tty1.service.d
+    state: directory
+    mode: "0755"
+
+- name: Autologin de {{ desktop_user }} sur tty1
+  copy:
+    dest: /etc/systemd/system/getty@tty1.service.d/autologin.conf
+    mode: "0644"
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=-/usr/bin/agetty --autologin {{ desktop_user }} --noclear %I $TERM
+
+- name: Recharger systemd (prise en compte de l'autologin)
+  systemd:
+    daemon_reload: true

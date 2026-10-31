@@ -1,0 +1,42 @@
+---
+# Point d'entrée unique. Idempotent : relançable sans risque.
+#
+# Étape 1 (localhost) : réseau/pool libvirt, image cloud Arch, cloud-init, VM,
+#                        attente du boot, découverte de l'IP -> groupe blackarch_vm.
+# Étape 2 (la VM)      : BlackArch (strap.sh, blackman, outils CTF).
+# Étape 3 (la VM)      : bureau Openbox avec la conf officielle BlackArch.
+# Étape 4 (la VM)      : qemu-guest-agent + spice-vdagent (équivalent "guest additions").
+# Étape 5 (la VM)      : WireGuard + script vpn.
+
+- name: Provisionner la VM libvirt
+  hosts: local
+  gather_facts: false
+  environment:
+    LIBVIRT_DEFAULT_URI: qemu:///system
+  roles:
+    - vm_provision
+
+- name: Installer BlackArch + outils CTF
+  hosts: blackarch_vm
+  become: true
+  gather_facts: true
+  roles:
+    - blackarch_base
+
+- name: Bureau Openbox (conf officielle BlackArch)
+  hosts: blackarch_vm
+  become: true
+  roles:
+    - desktop_openbox
+
+- name: Intégration libvirt (guest agent / spice)
+  hosts: blackarch_vm
+  become: true
+  roles:
+    - guest_agent
+
+- name: WireGuard + script vpn
+  hosts: blackarch_vm
+  become: true
+  roles:
+    - wireguard_vpn

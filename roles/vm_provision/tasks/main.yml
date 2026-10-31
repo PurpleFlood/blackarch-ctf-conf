@@ -1,0 +1,207 @@
+---
+# Tout ce rôle tourne sur localhost (hosts: local) et ne touche jamais le
+# système Nix de l'hôte : il pilote juste virsh/virt-install déjà présents.
+
+- name: Clé SSH dédiée au projet (générée une seule fois, jamais ta clé perso)
+  command: >
+    ssh-keygen -t ed25519 -f {{ ssh_private_key_path }} -N "" -C "blackarch-ctf"
+  args:
+    creates: "{{ ssh_private_key_path }}"
+
+- name: Vérifier la présence du pool de stockage dédié
+  command: virsh pool-info {{ libvirt_pool_name }}
+  register: pool_info
+  changed_when: false
+  failed_when: false
+
+- name: Définir + construire + démarrer le pool de stockage dédié
+  when: pool_info.rc != 0
+  block:
+    - command: >
+        virsh pool-define-as {{ libvirt_pool_name }} dir
+        --target {{ libvirt_pool_path }}
+    - command: virsh pool-build {{ libvirt_pool_name }}
+    - command: virsh pool-autostart {{ libvirt_pool_name }}
+    - command: virsh pool-start {{ libvirt_pool_name }}
+
+- name: Est-ce que la VM existe déjà ?
+  command: virsh dominfo {{ vm_name }}
+  register: dom_info
+  changed_when: false
+  failed_when: false
+
+# ── Première création (ignoré si la VM existe déjà) ──────────────────────────
+
+- name: Télécharger le hash SHA256 officiel de l'image cloud Arch
+  uri:
+    url: "{{ arch_cloud_image_checksum_url }}"
+    return_content: true
+  register: arch_checksum_raw
+  when: dom_info.rc != 0
+
+- name: Dossier de cache local
+  file:
+    path: "{{ lookup('env', 'HOME') }}/.cache/blackarch-ctf"
+    state: directory
+  when: dom_info.rc != 0
+
+- name: Télécharger l'image cloud Arch Linux (mise en cache localement)
+  get_url:
+    url: "{{ arch_cloud_image_url }}"
+    dest: "{{ lookup('env', 'HOME') }}/.cache/blackarch-ctf/arch-cloud.qcow2"
+    checksum: "sha256:{{ arch_checksum_raw.content.split()[0] }}"
+  when: dom_info.rc != 0
+
+- name: Volume de base (image Arch) déjà importé dans le pool ?
+  command: virsh vol-info arch-base.qcow2 --pool {{ libvirt_pool_name }}
+  register: base_vol_info
+  changed_when: false
+  failed_when: false
+  when: dom_info.rc != 0
+
+- name: Taille (octets) de l'image téléchargée
+  stat:
+    path: "{{ lookup('env', 'HOME') }}/.cache/blackarch-ctf/arch-cloud.qcow2"
+  register: arch_image_stat
+  when: dom_info.rc != 0 and base_vol_info.rc | default(1) != 0
+
+- name: Importer l'image Arch comme volume de base (via libvirtd, pas d'accès disque direct nécessaire)
+  when: dom_info.rc != 0 and base_vol_info.rc | default(1) != 0
+  block:
+    - command: >
+        virsh vol-create-as {{ libvirt_pool_name }} arch-base.qcow2
+        {{ arch_image_stat.stat.size }} --format qcow2
+    - command: >
+        virsh vol-upload arch-base.qcow2
+        {{ lookup('env', 'HOME') }}/.cache/blackarch-ctf/arch-cloud.qcow2
+        --pool {{ libvirt_pool_name }}
+
+- name: Volume disque de la VM (overlay COW) déjà créé ?
+  command: virsh vol-info {{ vm_name }}.qcow2 --pool {{ libvirt_pool_name }}
+  register: vm_vol_info
+  changed_when: false
+  failed_when: false
+  when: dom_info.rc != 0
+
+- name: Créer le disque de la VM (COW au-dessus du volume de base, grandit jusqu'à vm_disk_gb)
+  command: >
+    virsh vol-create-as {{ libvirt_pool_name }} {{ vm_name }}.qcow2
+    {{ vm_disk_gb }}G --format qcow2
+    --backing-vol arch-base.qcow2 --backing-vol-format qcow2
+  when: dom_info.rc != 0 and vm_vol_info.rc | default(1) != 0
+
+- name: Générer le cloud-init (user-data / meta-data)
+  when: dom_info.rc != 0
+  block:
+    - file:
+        path: /tmp/blackarch-ctf-seed
+        state: directory
+    - template:
+        src: user-data.yaml.j2
+        dest: /tmp/blackarch-ctf-seed/user-data
+    - template:
+        src: meta-data.yaml.j2
+        dest: /tmp/blackarch-ctf-seed/meta-data
+    - command: >
+        xorriso -as mkisofs -o /tmp/blackarch-ctf-seed.iso
+        -V cidata -J -r /tmp/blackarch-ctf-seed/user-data /tmp/blackarch-ctf-seed/meta-data
+
+- name: Volume seed cloud-init déjà présent dans le pool ?
+  command: virsh vol-info {{ vm_name }}-seed.iso --pool {{ libvirt_pool_name }}
+  register: seed_vol_info
+  changed_when: false
+  failed_when: false
+  when: dom_info.rc != 0
+
+- name: Importer le seed cloud-init dans le pool
+  when: dom_info.rc != 0 and seed_vol_info.rc | default(1) != 0
+  block:
+    - stat:
+        path: /tmp/blackarch-ctf-seed.iso
+      register: seed_stat
+    - command: >
+        virsh vol-create-as {{ libvirt_pool_name }} {{ vm_name }}-seed.iso
+        {{ seed_stat.stat.size }} --format raw
+    - command: >
+        virsh vol-upload {{ vm_name }}-seed.iso /tmp/blackarch-ctf-seed.iso
+        --pool {{ libvirt_pool_name }}
+
+- name: Définir et démarrer la VM (tente avec os-variant archlinux, sinon sans)
+  when: dom_info.rc != 0
+  block:
+    - command: >
+        virt-install --name {{ vm_name }}
+        --vcpus {{ vm_vcpus }} --memory {{ vm_memory_mb }}
+        --disk vol={{ libvirt_pool_name }}/{{ vm_name }}.qcow2,bus=virtio
+        --disk vol={{ libvirt_pool_name }}/{{ vm_name }}-seed.iso,device=cdrom
+        --network none
+        --qemu-commandline="-netdev user,id=net1,hostfwd=tcp::{{ ssh_forward_port }}-:22 -device virtio-net-pci,netdev=net1,addr=0x1e"
+        --graphics spice,gl={{ 'on' if spice_gl_enabled else 'off' }}
+        --video virtio
+        --channel spicevmc,target_type=virtio,name=com.redhat.spice.0
+        --channel unix,target_type=virtio,name=org.qemu.guest_agent.0
+        --rng /dev/urandom
+        --os-variant archlinux
+        --import --noautoconsole
+      register: virt_install_result
+      failed_when: false
+    - command: >
+        virt-install --name {{ vm_name }}
+        --vcpus {{ vm_vcpus }} --memory {{ vm_memory_mb }}
+        --disk vol={{ libvirt_pool_name }}/{{ vm_name }}.qcow2,bus=virtio
+        --disk vol={{ libvirt_pool_name }}/{{ vm_name }}-seed.iso,device=cdrom
+        --network none
+        --qemu-commandline="-netdev user,id=net1,hostfwd=tcp::{{ ssh_forward_port }}-:22 -device virtio-net-pci,netdev=net1,addr=0x1e"
+        --graphics spice,gl={{ 'on' if spice_gl_enabled else 'off' }}
+        --video virtio
+        --channel spicevmc,target_type=virtio,name=com.redhat.spice.0
+        --channel unix,target_type=virtio,name=org.qemu.guest_agent.0
+        --rng /dev/urandom
+        --os-variant generic
+        --import --noautoconsole
+      when: virt_install_result.rc != 0
+
+# ── La VM existe déjà : juste s'assurer qu'elle tourne ───────────────────────
+
+- name: État actuel de la VM
+  command: virsh domstate {{ vm_name }}
+  register: dom_state
+  changed_when: false
+  when: dom_info.rc == 0
+
+- name: Démarrer la VM si elle est éteinte
+  command: virsh start {{ vm_name }}
+  when: dom_info.rc == 0 and 'shut off' in dom_state.stdout
+
+# ── Réseau "user" QEMU (slirp) : pas de bridge, pas de bail DHCP à lire côté
+# libvirt. Le port SSH de la VM est forwardé sur 127.0.0.1:{{ ssh_forward_port }}.
+
+- name: Attendre que SSH réponde (port forwardé {{ ssh_forward_port }} -> 22)
+  # Le port forwardé par QEMU (slirp) accepte des connexions TCP dès le
+  # démarrage de QEMU, bien avant que le sshd de l'invité ne soit prêt (donc
+  # un simple wait_for sur le port est un faux positif) : on tente une vraie
+  # poignée de main SSH jusqu'à ce qu'elle réussisse.
+  command: >
+    ssh -i {{ ssh_private_key_path }} -p {{ ssh_forward_port }}
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    -o ConnectTimeout=5 -o BatchMode=yes
+    root@127.0.0.1 true
+  register: ssh_probe
+  until: ssh_probe.rc == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Enregistrer la VM dans l'inventaire dynamique
+  add_host:
+    name: "{{ vm_name }}"
+    groups: blackarch_vm
+    ansible_host: 127.0.0.1
+    ansible_port: "{{ ssh_forward_port }}"
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ ssh_private_key_path }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+- name: Afficher l'accès SSH de la VM
+  debug:
+    msg: "VM {{ vm_name }} prête : ssh -p {{ ssh_forward_port }} root@127.0.0.1"

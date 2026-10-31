@@ -1,0 +1,33 @@
+---
+# Équivalent libvirt/QEMU des "guest additions" VirtualBox : partage du
+# presse-papier, redimensionnement auto de l'écran, arrêt propre depuis
+# virt-manager/virsh.
+
+- name: Paquets guest agent / spice
+  command: >
+    pacman -S --noconfirm --needed qemu-guest-agent spice-vdagent mesa
+  register: ga_pkgs
+  changed_when: "'nothing to do' not in ga_pkgs.stdout | lower"
+
+- name: Activer qemu-guest-agent
+  systemd:
+    name: qemu-guest-agent
+    enabled: true
+    state: started
+
+- name: Activer le démon système spice-vdagentd
+  systemd:
+    name: spice-vdagentd
+    enabled: true
+    state: started
+
+- name: Lancer spice-vdagent dans la session Openbox (presse-papier, resize)
+  blockinfile:
+    path: "/home/{{ desktop_user }}/.config/openbox/autostart"
+    create: true
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+    mode: "0755"
+    marker: "# {mark} ANSIBLE spice-vdagent"
+    block: |
+      spice-vdagent &

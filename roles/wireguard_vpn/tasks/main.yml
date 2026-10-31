@@ -1,0 +1,68 @@
+---
+- name: Paquets WireGuard
+  command: pacman -S --noconfirm --needed wireguard-tools openresolv
+  register: wg_pkgs
+  changed_when: "'nothing to do' not in wg_pkgs.stdout | lower"
+
+- name: Dossier /etc/wireguard
+  file:
+    path: /etc/wireguard
+    state: directory
+    mode: "0700"
+
+- name: Copier les configs WireGuard du hôte (Mullvad) vers la VM
+  when: sync_wireguard_from_host | bool
+  block:
+    - name: Archiver {{ host_wireguard_dir }} sur l'hôte
+      command: tar czf /tmp/blackarch-ctf-wg.tar.gz -C /etc wireguard
+      delegate_to: localhost
+      become: true
+      changed_when: false
+
+    - name: Rendre l'archive lisible pour le transfert
+      file:
+        path: /tmp/blackarch-ctf-wg.tar.gz
+        mode: "0644"
+      delegate_to: localhost
+      become: true
+
+    - name: Copier l'archive vers la VM
+      copy:
+        src: /tmp/blackarch-ctf-wg.tar.gz
+        dest: /tmp/blackarch-ctf-wg.tar.gz
+        mode: "0600"
+
+    - name: Extraire les configs WireGuard dans la VM
+      unarchive:
+        src: /tmp/blackarch-ctf-wg.tar.gz
+        dest: /etc
+        remote_src: true
+
+    - name: Durcir les permissions /etc/wireguard
+      command: chmod -R go-rwx /etc/wireguard
+      changed_when: false
+
+    - name: Nettoyer l'archive côté VM
+      file:
+        path: /tmp/blackarch-ctf-wg.tar.gz
+        state: absent
+
+    - name: Nettoyer l'archive côté hôte
+      file:
+        path: /tmp/blackarch-ctf-wg.tar.gz
+        state: absent
+      delegate_to: localhost
+      become: true
+
+- name: Déployer le script vpn
+  template:
+    src: vpn.sh.j2
+    dest: /usr/local/bin/vpn
+    mode: "0755"
+
+- name: Sudo NOPASSWD pour /usr/local/bin/vpn ({{ desktop_user }})
+  copy:
+    dest: "/etc/sudoers.d/20-vpn"
+    content: "{{ desktop_user }} ALL=(ALL) NOPASSWD: /usr/local/bin/vpn\n"
+    mode: "0440"
+    validate: "visudo -cf %s"

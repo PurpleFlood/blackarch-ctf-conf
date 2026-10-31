@@ -1,0 +1,91 @@
+---
+- name: Charger la liste de paquets
+  include_vars: packages.yml
+
+- name: Attendre la fin de cloud-init (premier boot)
+  command: cloud-init status --wait
+  changed_when: false
+
+- name: Initialiser le trousseau pacman
+  command: pacman-key --init
+  changed_when: false
+
+- name: Peupler le trousseau Arch Linux
+  command: pacman-key --populate archlinux
+  changed_when: false
+
+- name: Mise à jour complète du système
+  command: pacman -Syu --noconfirm --needed
+  register: pacman_upgrade
+  changed_when: "'nothing to do' not in pacman_upgrade.stdout | lower"
+
+- name: Dépendances de base (git, base-devel, sudo...)
+  command: >
+    pacman -S --noconfirm --needed git base-devel curl sudo which
+  register: base_deps
+  changed_when: "'nothing to do' not in base_deps.stdout | lower"
+
+- name: Le dépôt BlackArch est-il déjà présent ?
+  command: grep -q '^\[blackarch\]' /etc/pacman.conf
+  register: blackarch_repo_present
+  changed_when: false
+  failed_when: false
+
+- name: Ajouter le dépôt BlackArch (strap.sh)
+  shell: curl -s https://blackarch.org/strap.sh | bash
+  when: blackarch_repo_present.rc != 0
+
+- name: Rafraîchir les bases de paquets (dépôt BlackArch ajouté)
+  command: pacman -Sy --noconfirm
+  changed_when: false
+
+- name: Installer blackman (menu/outil officiel BlackArch)
+  command: pacman -S --noconfirm --needed blackman
+  register: blackman_install
+  changed_when: "'nothing to do' not in blackman_install.stdout | lower"
+
+- name: Créer l'utilisateur de bureau ({{ desktop_user }})
+  user:
+    name: "{{ desktop_user }}"
+    groups: wheel
+    shell: /bin/bash
+    create_home: true
+    password: "{{ desktop_user_password_hash }}"
+
+- name: Sudo NOPASSWD pour {{ desktop_user }} (VM CTF isolée, pas de friction sur les outils root)
+  copy:
+    dest: "/etc/sudoers.d/10-{{ desktop_user }}"
+    content: "{{ desktop_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+- name: Installer le set d'outils CTF (BlackArch/Arch)
+  command: >
+    pacman -S --noconfirm --needed {{ pacman_packages | join(' ') }}
+  register: pkg_install
+  changed_when: "'nothing to do' not in pkg_install.stdout | lower"
+
+- name: yay-bin déjà installé ?
+  stat:
+    path: /usr/bin/yay
+  register: yay_bin
+
+- name: Construire yay-bin (helper AUR, version pré-compilée = plus léger que yay source)
+  when: not yay_bin.stat.exists
+  become: true
+  become_user: "{{ desktop_user }}"
+  block:
+    - command: git clone --depth 1 https://aur.archlinux.org/yay-bin.git /home/{{ desktop_user }}/yay-bin
+      args:
+        creates: "/home/{{ desktop_user }}/yay-bin"
+    - command: makepkg -si --noconfirm
+      args:
+        chdir: "/home/{{ desktop_user }}/yay-bin"
+
+- name: Installer les paquets AUR (équivalents Kali absents de BlackArch)
+  become: true
+  become_user: "{{ desktop_user }}"
+  command: >
+    yay -S --noconfirm --needed {{ aur_packages | join(' ') }}
+  register: aur_install
+  changed_when: "'nothing to do' not in aur_install.stdout | lower"

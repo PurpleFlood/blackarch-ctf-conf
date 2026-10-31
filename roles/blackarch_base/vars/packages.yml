@@ -1,0 +1,58 @@
+---
+# Sélection volontairement curatée (pas le groupe "blackarch" complet, ~2800
+# paquets, beaucoup trop lourd). Inspirée du set par défaut de Kali : quand
+# BlackArch n'a pas l'équivalent exact dans ses dépôts officiels, on passe par
+# l'AUR (ex: burpsuite, pwndbg) plutôt que de renoncer à l'outil.
+
+pacman_packages:
+  # Recon / scan
+  - nmap
+  - masscan
+  - whatweb
+  - nikto
+  - dnsenum
+  - gobuster
+  - ffuf
+  - wfuzz
+  - whois
+  - bind
+  # Web
+  - sqlmap
+  - wpscan
+  - dirb
+  # Mots de passe / hash
+  - john
+  - hashcat
+  - hydra
+  # Réseau / sniffing
+  - wireshark-qt
+  - tcpdump
+  - openbsd-netcat
+  - socat
+  - proxychains-ng
+  - tor
+  - aircrack-ng
+  # SMB / Active Directory
+  - smbclient
+  - impacket
+  - responder
+  - crackmapexec
+  # Forensic / stégano
+  - binwalk
+  - foremost
+  - stegseek
+  - perl-image-exiftool
+  # Reverse / exploit dev
+  - radare2
+  - gdb
+  - metasploit
+  - checksec
+  - ropper
+  - python-pwntools
+  # Wordlists
+  - seclists
+
+# Pas dans les dépôts officiels BlackArch/Arch : équivalent Kali via AUR.
+aur_packages:
+  - burpsuite    # équivalent Kali de Burp Suite Community
+  - pwndbg       # extension gdb façon Kali pour le pwn/CTF
