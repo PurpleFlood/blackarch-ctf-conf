@@ -1,6 +1,6 @@
 ---
-- name: Paquets WireGuard
-  command: pacman -S --noconfirm --needed wireguard-tools openresolv
+- name: Paquets WireGuard + OpenVPN
+  command: pacman -S --noconfirm --needed wireguard-tools openresolv openvpn
   register: wg_pkgs
   changed_when: "'nothing to do' not in wg_pkgs.stdout | lower"
 

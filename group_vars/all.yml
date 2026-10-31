@@ -34,6 +34,10 @@ desktop_user_password_hash: "!"  # compte sans mot de passe utilisable (login au
 sync_wireguard_from_host: true
 host_wireguard_dir: /etc/wireguard
 
+# Disposition clavier au démarrage de la session graphique ("us" ou "fr").
+# Bascule en live dans la VM avec Super+Espace (script /usr/local/bin/kbd-toggle).
+keyboard_layout_default: us
+
 # Accélération 3D SPICE (virgl). Désactivé par défaut : fiable sur les deux machines
 # (NVIDIA propriétaire sur "pc" peut être capricieux avec virgl). Active si ça te tente.
 spice_gl_enabled: false

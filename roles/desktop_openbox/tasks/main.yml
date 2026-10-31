@@ -3,12 +3,12 @@
 # blackarch-config-openbox, fichiers sous /usr/share/blackarch/config/openbox).
 # Pas de display manager : login auto sur tty1 + `startx`, comme sur l'hôte.
 
-- name: Paquets X11 / Openbox / conf officielle BlackArch
+- name: Paquets X11 / Openbox / conf officielle BlackArch / navigateur
   command: >
     pacman -S --noconfirm --needed
-    xorg-server xorg-xinit xorg-xsetroot xorg-xrandr
+    xorg-server xorg-xinit xorg-xsetroot xorg-xrandr xorg-setxkbmap
     openbox blackarch-config-openbox
-    feh xterm ttf-dejavu
+    feh xterm ttf-dejavu firefox
   register: desktop_pkgs
   changed_when: "'nothing to do' not in desktop_pkgs.stdout | lower"
 
@@ -36,6 +36,56 @@
     remote_src: true
     src: "/usr/share/blackarch/config/openbox/usr/share/themes/blackarch"
     dest: "/usr/share/themes/"
+
+- name: Script de bascule clavier AZERTY/QWERTY
+  copy:
+    dest: /usr/local/bin/kbd-toggle
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Bascule us <-> fr (azerty). État gardé dans /tmp (remis à "us" au reboot).
+      state=/tmp/.kbd-layout
+      cur=$(cat "$state" 2>/dev/null || echo us)
+      if [ "$cur" = "us" ]; then
+        setxkbmap fr && echo fr > "$state"
+      else
+        setxkbmap us && echo us > "$state"
+      fi
+
+- name: Disposition clavier par défaut au démarrage de la session ({{ keyboard_layout_default }})
+  blockinfile:
+    path: "/home/{{ desktop_user }}/.config/openbox/autostart"
+    create: true
+    owner: "{{ desktop_user }}"
+    group: "{{ desktop_user }}"
+    mode: "0755"
+    marker: "# {mark} ANSIBLE blackarch-ctf keyboard"
+    block: |
+      setxkbmap {{ keyboard_layout_default }} && echo {{ keyboard_layout_default }} > /tmp/.kbd-layout
+
+- name: Raccourcis clavier perso (Super+Espace clavier, Super+F Firefox, Super+Entrée terminal)
+  # rc.xml officiel réécrit en entier à chaque "Copier la conf Openbox" ci-dessus :
+  # on réinjecte ce bloc juste avant </keyboard> pour que ça survive aux reruns.
+  blockinfile:
+    path: "/home/{{ desktop_user }}/.config/openbox/rc.xml"
+    marker: "    <!-- {mark} ANSIBLE blackarch-ctf keybinds -->"
+    insertbefore: "^\\s*</keyboard>"
+    block: |2
+          <keybind key="W-space">
+            <action name="Execute">
+              <command>kbd-toggle</command>
+            </action>
+          </keybind>
+          <keybind key="W-f">
+            <action name="Execute">
+              <command>firefox</command>
+            </action>
+          </keybind>
+          <keybind key="W-Return">
+            <action name="Execute">
+              <command>xterm</command>
+            </action>
+          </keybind>
 
 - name: .xinitrc -> lance la session Openbox
   copy:
